@@ -79,8 +79,8 @@ export const AdminProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 if (inquiriesRes.error) throw inquiriesRes.error;
                 if (logsRes.error) throw logsRes.error;
 
-                setInquiries(inquiriesRes.data.map(d => ({ ...convertKeys(d, toCamelCase), date: d.created_at })) as Inquiry[]);
-                setLogEntries(logEntries.map(d => ({ ...convertKeys(d, toCamelCase), id: d.id.toString() })) as LogEntry[]);
+                setInquiries(inquiriesRes.data.map(d => ({ ...convertKeys(d, toCamelCase), date: d.created_at, id: String(d.id) })) as Inquiry[]);
+                setLogEntries(logsRes.data.map(d => ({...convertKeys(d, toCamelCase), id: String(d.id)})) as LogEntry[]);
             } else {
                  setInquiries([]);
                  setLogEntries([]);
