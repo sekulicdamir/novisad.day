@@ -1,0 +1,234 @@
+
+// A simple Node.js + Express backend for the novisad.day app.
+// To run this:
+// 1. Make sure you have Node.js installed.
+// 2. Install dependencies by running: npm install express cors jsonwebtoken body-parser
+// 3. Start the server: node server.js
+// 4. In a separate terminal, run your frontend development server.
+//
+// For deployment, both the frontend build files and this server should be hosted.
+// The frontend should be configured to proxy API requests to this server.
+
+const express = require('express');
+const cors = require('cors');
+const jwt = require('jsonwebtoken');
+const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
+
+const app = express();
+const PORT = 3001;
+const DB_PATH = path.join(__dirname, 'db.json');
+const JWT_SECRET = 'your-super-secret-key-that-should-be-in-an-env-file';
+
+// --- MIDDLEWARE ---
+app.use(cors());
+app.use(bodyParser.json());
+
+// --- DATABASE HELPERS ---
+const readDb = () => {
+    try {
+        const data = fs.readFileSync(DB_PATH, 'utf8');
+        return JSON.parse(data);
+    } catch (error) {
+        console.error("Error reading database:", error);
+        // If the DB file doesn't exist or is corrupted, return a default structure
+        return { tours: [], inquiries: [], settings: {}, logEntries: [] };
+    }
+};
+
+const writeDb = (data) => {
+    try {
+        fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf8');
+    } catch (error) {
+        console.error("Error writing to database:", error);
+    }
+};
+
+// --- AUTH MIDDLEWARE ---
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (token == null) return res.sendStatus(401); // if there isn't any token
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
+};
+
+
+// --- API ROUTES ---
+
+// AUTH
+app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body;
+    // In a real app, you'd check this against a database of users.
+    if (username === 'admin' && password === 'password') {
+        const user = { name: username };
+        const accessToken = jwt.sign(user, JWT_SECRET, { expiresIn: '24h' });
+        res.json({ accessToken: accessToken });
+    } else {
+        res.status(401).send('Invalid credentials');
+    }
+});
+
+// TOURS (Public read, protected write)
+app.get('/api/tours', (req, res) => {
+    const db = readDb();
+    res.json(db.tours);
+});
+app.post('/api/tours', authenticateToken, (req, res) => {
+    const db = readDb();
+    const newTour = req.body;
+    db.tours.push(newTour);
+    writeDb(db);
+    res.status(201).json(newTour);
+});
+app.put('/api/tours/:id', authenticateToken, (req, res) => {
+    const db = readDb();
+    const updatedTour = req.body;
+    const index = db.tours.findIndex(t => t.id === req.params.id);
+    if (index !== -1) {
+        db.tours[index] = updatedTour;
+        writeDb(db);
+        res.json(updatedTour);
+    } else {
+        res.status(404).send('Tour not found');
+    }
+});
+app.delete('/api/tours/:id', authenticateToken, (req, res) => {
+    const db = readDb();
+    const tourId = req.params.id;
+    const initialLength = db.tours.length;
+    db.tours = db.tours.filter(t => t.id !== tourId);
+    if (db.tours.length < initialLength) {
+        writeDb(db);
+        res.status(204).send();
+    } else {
+        res.status(404).send('Tour not found');
+    }
+});
+
+
+// INQUIRIES (Public create, protected read/update)
+app.get('/api/inquiries', authenticateToken, (req, res) => {
+    const db = readDb();
+    res.json(db.inquiries);
+});
+app.post('/api/inquiries', (req, res) => {
+    const db = readDb();
+    const newInquiry = req.body;
+    db.inquiries.unshift(newInquiry); // Add to the beginning
+    writeDb(db);
+    res.status(201).json(newInquiry);
+});
+app.put('/api/inquiries/:id', authenticateToken, (req, res) => {
+    const db = readDb();
+    const { status } = req.body;
+    const index = db.inquiries.findIndex(i => i.id === req.params.id);
+    if (index !== -1) {
+        db.inquiries[index].status = status;
+        writeDb(db);
+        res.json(db.inquiries[index]);
+    } else {
+        res.status(404).send('Inquiry not found');
+    }
+});
+
+
+// SETTINGS (Public read, protected write)
+app.get('/api/settings', (req, res) => {
+    const db = readDb();
+    res.json(db.settings);
+});
+app.put('/api/settings', authenticateToken, (req, res) => {
+    const db = readDb();
+    const newSettings = req.body;
+    db.settings = newSettings;
+    writeDb(db);
+    res.json(db.settings);
+});
+
+// LOGS (Public create, protected read)
+app.get('/api/logs', authenticateToken, (req, res) => {
+    const db = readDb();
+    res.json(db.logEntries);
+});
+app.post('/api/logs', (req, res) => {
+    const db = readDb();
+    const newLogEntry = req.body;
+    db.logEntries.unshift(newLogEntry);
+    writeDb(db);
+    res.status(201).json(newLogEntry);
+});
+
+
+// --- START SERVER ---
+app.listen(PORT, () => {
+    console.log(`API server running on http://localhost:${PORT}`);
+    // Check if DB exists, if not, create it with default data.
+    if (!fs.existsSync(DB_PATH)) {
+        console.log('db.json not found, creating a new one...');
+        const defaultData = {
+          tours: [
+                {
+                    "id": "novi-sad-fortress-tour",
+                    "title": { "en": "Novi Sad Center & Petrovaradin Fortress", "sr": "Centar Novog Sada i Petrovaradinska Tvrđava", "hr": "Centar Novog Sada i Petrovaradinska Tvrđava", "me": "Centar Novog Sada i Petrovaradinska Tvrđava", "ru": "Центр Нови-Сада и Петроварадинская крепость", "de": "Zentrum von Novi Sad & Festung Petrovaradin", "uk": "Центр Нового Саду та Петроварадинська фортеця", "tr": "Novi Sad Merkezi ve Petrovaradin Kalesi", "es": "Centro de Novi Sad y Fortaleza de Petrovaradin", "zh-HK": "諾維薩德市中心與彼得羅瓦拉丁堡壘", "zh-CN": "诺维萨德市中心与彼得罗瓦拉丁堡垒", "ja": "ノヴィ・サド中心部とペトロヴァラディン要塞", "hi": "नोवी सैड सेंटर और पेट्रोवराडिन किला" },
+                    "subtitle": { "en": "Explore the \"Gibraltar on the Danube\" and the vibrant city center.", "sr": "Istražite \"Gibraltar na Dunavu\" i živahni centar grada.", "hr": "Istražite \"Gibraltar na Dunavu\" i živahni centar grada.", "me": "Istražite \"Gibraltar na Dunavu\" i živahni centar grada.", "ru": "Исследуйте \"Гибралтар на Дунае\" и оживленный центр города.", "de": "Erkunden Sie das \"Gibraltar an der Donau\" und das lebhafte Stadtzentrum.", "uk": "Дослідіть \"Гібралтар на Дунаї\" та жвавий центр міста.", "tr": "\"Tuna üzerindeki Cebelitarık\"ı ve canlı şehir merkezini keşfedin.", "es": "Explore el \"Gibraltar en el Danubio\" y el vibrante centro de la ciudad.", "zh-HK": "探索“多瑙河上的直布羅陀”與充滿活力的市中心。", "zh-CN": "探索“多瑙河上的直布罗陀”与充满活力的市中心。", "ja": "「ドナウのジブラルタル」と活気ある市街地を探索。", "hi": "\"डेन्यूब पर जिब्राल्टर\" और जीवंत शहर के केंद्र का अन्वेषण करें।" },
+                    "shortDescription": { "en": "A comprehensive walking tour covering the historic heart of Novi Sad and the magnificent Petrovaradin Fortress across the river.", "sr": "Sveobuhvatna pešačka tura koja pokriva istorijsko srce Novog Sada i veličanstvenu Petrovaradinsku tvrđavu preko reke.", "hr": "Sveobuhvatna pješačka tura koja pokriva povijesno srce Novog Sada i veličanstvenu Petrovaradinsku tvrđavu preko rijeke.", "me": "Sveobuhvatna pješačka tura koja pokriva istorijsko srce Novog Sada i veličanstvenu Petrovaradinsku tvrđavu preko rijeke.", "ru": "Обзорная пешеходная экскурсия по историческому центру Нови-Сада и великолепной Петроварадинской крепости через реку.", "de": "Eine umfassende Wanderung durch das historische Herz von Novi Sad und die prächtige Festung Petrovaradin auf der anderen Flussseite.", "uk": "Комплексна пішохідна екскурсія, що охоплює історичне серце Нового Саду та величну Петроварадинську фортецю через річку.", "tr": "Novi Sad'ın tarihi kalbini ve nehrin karşısındaki muhteşem Petrovaradin Kalesi'ni kapsayan kapsamlı bir yürüyüş turu.", "es": "Un completo recorrido a pie que cubre el corazón histórico de Novi Sad y la magnífica Fortaleza de Petrovaradin al otro lado del río.", "zh-HK": "一次全面的徒步遊覽，涵蓋諾維薩德的歷史中心和河對岸宏偉的彼得羅瓦拉丁堡壘。", "zh-CN": "一次全面的徒步游览，涵盖诺维萨德的历史中心和河对岸宏伟的彼得罗瓦拉丁堡垒。", "ja": "ノヴィ・サドの歴史的中心部と川向こうの壮大なペトロヴァラディン要塞を巡る包括的なウォーキングツアー。", "hi": "नोवी सैड के ऐतिहासिक केंद्र और नदी के पार शानदार पेट्रोवराडिन किले को कवर करने वाला एक व्यापक पैदल दौरा।" },
+                    "longDescription": { "en": "Begin your journey in Liberty Square, surrounded by stunning architecture. We will stroll through charming streets to the Bishop's Palace and St. George's Cathedral. Then, we cross the Danube to explore the iconic Petrovaradin Fortress, uncovering its history, underground tunnels, and enjoying panoramic views of the city. The tour includes a drink at a café on the fortress.", "sr": "Započnite svoje putovanje na Trgu slobode, okruženi zadivljujućom arhitekturom. Prošetaćemo šarmantnim ulicama do Vladičanskog dvora i Saborne crkve Svetog Đorđa. Zatim prelazimo Dunav da istražimo ikoničnu Petrovaradinsku tvrđavu, otkrivajući njenu istoriju, podzemne tunele i uživajući u panoramskom pogledu na grad. Tura uključuje piće u kafiću na tvrđavi.", "hr": "Započnite svoje putovanje na Trgu slobode, okruženi zadivljujućom arhitekturom. Prošetat ćemo šarmantnim ulicama do Vladičanskog dvora i Saborne crkve Svetog Jurja. Zatim prelazimo Dunav da istražimo ikoničnu Petrovaradinsku tvrđavu, otkrivajući njezinu povijest, podzemne tunele i uživajući u panoramskom pogledu na grad. Tura uključuje piće u kafiću na tvrđavi.", "me": "Započnite svoje putovanje na Trgu slobode, okruženi zadivljujućom arhitekturom. Prošetaćemo šarmantnim ulicama do Vladičanskog dvora i Saborne crkve Svetog Đorđa. Zatim prelazimo Dunav da istražimo ikoničnu Petrovaradinsku tvrđavu, otkrivajući njenu istoriju, podzemne tunele i uživajući u panoramskom pogledu na grad. Tura uključuje piće u kafiću na tvrđavi.", "ru": "Начните свое путешествие на площади Свободы, в окружении потрясающей архитектуры. Мы прогуляемся по очаровательным улочкам до Епископского дворца и собора Святого Георгия. Затем мы пересечем Дунай, чтобы исследовать знаменитую Петроварадинскую крепость, узнать ее историю, подземные туннели и насладиться панорамным видом на город. Экскурсия включает напиток в кафе на крепости.", "de": "Beginnen Sie Ihre Reise am Freiheitsplatz, umgeben von atemberaubender Architektur. Wir schlendern durch charmante Straßen zum Bischofspalast und zur St.-Georgs-Kathedrale. Dann überqueren wir die Donau, um die ikonische Festung Petrovaradin zu erkunden, ihre Geschichte und unterirdischen Tunnel zu entdecken und einen Panoramablick auf die Stadt zu genießen. Die Tour beinhaltet ein Getränk in einem Café auf der Festung.", "uk": "Почніть свою подорож на площі Свободи, в оточенні приголомшливої архітектури. Ми прогуляємося чарівними вуличками до Єпископського палацу та собору Святого Георгія. Потім ми перетнемо Дунай, щоб дослідити знамениту Петроварадинську фортецю, розкрити її історію, підземні тунелі та насолодитися панорамним видом на місто. Екскурсія включає напій у кафе на фортеці.", "tr": "Yolculuğunuza çarpıcı mimariyle çevrili Özgürlük Meydanı'nda başlayın. Piskoposluk Sarayı ve Aziz George Katedrali'ne giden büyüleyici sokaklarda dolaşacağız. Ardından, Tuna'yı geçerek ikonik Petrovaradin Kalesi'ni keşfedecek, tarihini, yeraltı tünellerini ortaya çıkaracak ve şehrin panoramik manzarasının tadını çıkaracağız. Tur, kaledeki bir kafede bir içki içerir.", "es": "Comience su viaje en la Plaza de la Libertad, rodeado de una arquitectura impresionante. Pasearemos por calles encantadoras hasta el Palacio del Obispo y la Catedral de San Jorge. Luego, cruzaremos el Danubio para explorar la icónica Fortaleza de Petrovaradin, descubriendo su historia, túneles subterráneos y disfrutando de vistas panorámicas de la ciudad. El tour incluye una bebida en una cafetería de la fortaleza.", "zh-HK": "從自由廣場開始您的旅程，周圍環繞著令人驚嘆的建築。我們將漫步穿過迷人的街道，前往主教宮和聖喬治大教堂。然後，我們將穿過多瑙河，探索標誌性的彼得羅瓦拉丁堡壘，揭開其歷史和地下隧道，並欣賞城市的全景。遊覽包括在堡壘上的一家咖啡館享用一杯飲品。", "zh-CN": "从自由广场开始您的旅程，周围环绕着令人惊叹的建筑。我们将漫步穿过迷人的街道，前往主教宫和圣乔治大教堂。然后，我们将穿过多瑙河，探索标志性的彼得罗瓦拉丁堡垒，揭开其历史和地下隧道，并欣赏城市的全景。游览包括在堡垒上的一家咖啡馆享用一杯饮品。", "ja": "素晴らしい建築に囲まれたリバティスクエアから旅を始めましょう。魅力的な通りを散策し、主教宮殿や聖ゲオルギオス大聖堂へ向かいます。その後、ドナウ川を渡り、象徴的なペトロヴァラディン要塞を探検し、その歴史や地下トンネルを解き明かし、市街のパノラマビューを楽しみます。ツアーには要塞内のカフェでのドリンクが含まれています。", "hi": "लिबर्टी स्क्वायर से अपनी यात्रा शुरू करें, जो आश्चर्यजनक वास्तुकला से घिरा हुआ है। हम बिशप के महल और सेंट जॉर्ज कैथेड्रल तक आकर्षक सड़कों से गुजरेंगे। फिर, हम डेन्यूब को पार करके प्रतिष्ठित पेट्रोवराडिन किले का पता लगाएंगे, इसके इतिहास, भूमिगत सुरंगों को उजागर करेंगे, और शहर के मनोरम दृश्यों का आनंद लेंगे। इस दौरे में किले पर एक कैफे में एक पेय शामिल है।" },
+                    "images": [ "https://images.unsplash.com/photo-1610415539473-6f5a34586953?q=80&w=2070&auto=format&fit=crop", "https://images.unsplash.com/photo-1577005404533-337a66b53c82?q=80&w=1974&auto=format&fit=crop" ],
+                    "included": { "en": [ "Professional guide", "Fortress entrance tickets", "One drink at a café" ], "sr": [ "Profesionalni vodič", "Ulaznice za tvrđavu", "Jedno piće u kafiću" ], "hr": [ "Profesionalni vodič", "Ulaznice za tvrđavu", "Jedno piće u kafiću" ], "me": [ "Profesionalni vodič", "Ulaznice za tvrđavu", "Jedno piće u kafiću" ], "ru": [ "Профессиональный гид", "Входные билеты в крепость", "Один напиток в кафе" ], "de": [ "Professioneller Führer", "Eintrittskarten für die Festung", "Ein Getränk in einem Café" ], "uk": [ "Професійний гід", "Вхідні квитки до фортеці", "Один напій у кафе" ], "tr": [ "Profesional rehber", "Kale giriş biletleri", "Kafede bir içecek" ], "es": [ "Guía profesional", "Entradas para la fortaleza", "Una bebida en una cafetería" ], "zh-HK": [ "專業導遊", "堡壘門票", "咖啡館飲品一杯" ], "zh-CN": [ "专业导游", "堡垒门票", "咖啡馆饮品一杯" ], "ja": [ "プロのガイド", "要塞入場チケット", "カフェでのワンドリンク" ], "hi": [ "पेशेवर गाइड", "किले के प्रवेश टिकट", "कैफे में एक पेय" ] },
+                    "duration": { "en": "4-5 hours", "sr": "4-5 sati", "hr": "4-5 sati", "me": "4-5 sati", "ru": "4-5 часов", "de": "4-5 Stunden", "uk": "4-5 годин", "tr": "4-5 saat", "es": "4-5 horas", "zh-HK": "4-5 小時", "zh-CN": "4-5 小时", "ja": "4〜5時間", "hi": "4-5 घंटे" },
+                    "maxPeople": 8, "priceVariations": [ { "id": "1-2", "persons": "1-2", "price": 50 }, { "id": "3-4", "persons": "3-4", "price": 40 }, { "id": "5-8", "persons": "5-8", "price": 35 } ], "isAvailable": true, "isFeatured": true,
+                    "seo": { "metaTitle": { "en": "Novi Sad City & Fortress Tour | novisad.day" }, "metaDescription": { "en": "Explore the best of Novi Sad's city center and the Petrovaradin Fortress." } }
+                },
+                {
+                    "id": "sremski-karlovci-wine-tour",
+                    "title": { "en": "Sremski Karlovci Wine & History", "sr": "Sremski Karlovci Vino i Istorija", "hr": "Srijemski Karlovci Vino i Povijest", "me": "Srijemski Karlovci Vino i Istorija", "ru": "Сремски-Карловци: вино и история", "de": "Sremski Karlovci: Wein & Geschichte", "uk": "Сремські Карловці: вино та історія", "tr": "Sremski Karlovci: Şarap ve Tarih", "es": "Sremski Karlovci: Vino e Historia", "zh-HK": "斯雷姆斯基卡爾洛夫奇：葡萄酒與歷史", "zh-CN": "斯雷姆斯基卡尔洛夫奇：葡萄酒与历史", "ja": "スレムスキ・カルロフツィ：ワインと歴史", "hi": "स्रेम्स्की कार्लोव्सी: शराब और इतिहास" },
+                    "subtitle": { "en": "A journey to the baroque heart of Serbian culture and winemaking.", "sr": "Putovanje u barokno srce srpske kulture i vinarstva.", "hr": "Putovanje u barokno srce srpske kulture i vinarstva.", "me": "Putovanje u barokno srce srpske kulture i vinarstva.", "ru": "Путешествие в барочное сердце сербской культуры и виноделия.", "de": "Eine Reise in das barocke Herz der serbischen Kultur und Weinherstellung.", "uk": "Подорож до барокового серця сербської культури та виноробства.", "tr": "Sırp kültürünün ve şarapçılığının barok kalbine bir yolculuk.", "es": "Un viaje al corazón barroco de la cultura y la vinicultura serbia.", "zh-HK": "一趟探訪塞爾維亞文化與釀酒巴洛克核心的旅程。", "zh-CN": "一趟探访塞尔维亚文化与酿酒巴洛克核心的旅程。", "ja": "セルビア文化とワイン造りのバロック様式の中心への旅。", "hi": "सर्बियाई संस्कृति और वाइनमेकिंग के बारोक दिल की यात्रा।" },
+                    "shortDescription": { "en": "Discover the charming town of Sremski Karlovci, visit historic landmarks, and indulge in a wine tasting session at a traditional cellar.", "sr": "Otkrijte šarmantni grad Sremske Karlovce, posetite istorijske znamenitosti i prepustite se degustaciji vina u tradicionalnom podrumu.", "hr": "Otkrijte šarmantni grad Srijemske Karlovce, posjetite povijesne znamenitosti i prepustite se degustaciji vina u tradicionalnom podrumu.", "me": "Otkrijte šarmantni grad Srijemske Karlovce, posjetite istorijske znamenitosti i prepustite se degustaciji vina u tradicionalnom podrumu.", "ru": "Откройте для себя очаровательный городок Сремски-Карловци, посетите исторические достопримечательности и насладитесь дегустацией вин в традиционном погребе.", "de": "Entdecken Sie die charmante Stadt Sremski Karlovci, besuchen Sie historische Sehenswürdigkeiten und gönnen Sie sich eine Weinprobe in einem traditionellen Keller.", "uk": "Відкрийте для себе чарівне містечко Сремські Карловці, відвідайте історичні пам'ятки та насолодіться дегустацією вин у традиційному підвалі.", "tr": "Büyüleyici Sremski Karlovci kasabasını keşfedin, tarihi yerleri ziyaret edin ve geleneksel bir mahzende şarap tadım seansının keyfini çıkarın.", "es": "Descubra el encantador pueblo de Sremski Karlovci, visite lugares de interés histórico y disfrute de una sesión de cata de vinos en una bodega tradicional.", "zh-HK": "探索迷人的斯雷姆斯基卡爾洛夫奇小鎮，參觀歷史地標，並在傳統酒窖中盡情品嚐葡萄酒。", "zh-CN": "探索迷人的斯雷姆斯基卡尔洛夫奇小镇，参观历史地标，并在传统酒窖中尽情品尝葡萄酒。", "ja": "魅力的なスレムスキ・カルロフツィの町を探索し、歴史的建造物を訪れ、伝統的なセラーでのワインテイスティングをお楽しみください。", "hi": "स्रेम्स्की कार्लोव्सी के आकर्षक शहर की खोज करें, ऐतिहासिक स्थलों की यात्रा करें, और एक पारंपरिक तहखाने में वाइन चखने के सत्र में शामिल हों।" },
+                    "longDescription": { "en": "Just a short drive from Novi Sad lies Sremski Karlovci, a town rich in history and wine. We will explore its beautiful baroque center, including the Four Lions Fountain and the first Serbian high school. The highlight is a visit to a family-run wine cellar to taste the famous Bermet, a local specialty, along with other regional wines, paired with local snacks.", "sr": "Na samo kratkoj vožnji od Novog Sada nalazi se Sremski Karlovci, grad bogat istorijom i vinom. Istražićemo njegov prelepi barokni centar, uključujući Česmu Četiri Lava i prvu srpsku gimnaziju. Vrhunac je poseta porodičnom vinskom podrumu gde ćemo probati čuveni Bermet, lokalni specijalitet, uz druga regionalna vina, uparena sa lokalnim zakuskama.", "hr": "Samo kratku vožnju od Novog Sada nalazi se Srijemski Karlovci, grad bogat poviješću i vinom. Istražit ćemo njegov prelijepi barokni centar, uključujući Česmu Četiri Lava i prvu srpsku gimnaziju. Vrhunac je posjet obiteljskom vinskom podrumu gdje ćemo kušati čuveni Bermet, lokalni specijalitet, uz druga regionalna vina, uparena s lokalnim zalogajima.", "me": "Na samo kratkoj vožnji od Novog Sada nalazi se Srijemski Karlovci, grad bogat istorijom i vinom. Istražićemo njegov prelijepi barokni centar, uključujući Česmu Četiri Lava i prvu srpsku gimnaziju. Vrhunac je posjeta porodičnom vinskom podrumu gdje ćemo probati čuveni Bermet, lokalni specijalitet, uz druga regionalna vina, uparena s lokalnim zakuskama.", "ru": "Всего в нескольких минутах езды от Нови-Сада находится Сремски-Карловци, город с богатой историей и виноделием. Мы исследуем его прекрасный барочный центр, включая фонтан «Четыре льва» и первую сербскую гимназию. Главным событием станет посещение семейного винного погреба для дегустации знаменитого Бермета, местного специалитета, а также других региональных вин в сочетании с местными закусками.", "de": "Nur eine kurze Autofahrt von Novi Sad entfernt liegt Sremski Karlovci, eine Stadt reich an Geschichte und Wein. Wir werden das wunderschöne barocke Zentrum erkunden, einschließlich des Vier-Löwen-Brunnens und des ersten serbischen Gymnasiums. Der Höhepunkt ist der Besuch eines familiengeführten Weinkellers, um den berühmten Bermet, eine lokale Spezialität, zusammen mit anderen regionalen Weinen und lokalen Snacks zu probieren.", "uk": "Лише за декілька хвилин їзди від Нового Саду знаходяться Сремські Карловці, місто з багатою історією та виноробством. Ми дослідимо його прекрасний бароковий центр, включаючи фонтан «Чотири леви» та першу сербську гімназію. Кульмінацією стане відвідування сімейного винного погребу для дегустації знаменитого Бермету, місцевого делікатесу, разом з іншими регіональними винами та місцевими закусками.", "tr": "Novi Sad'dan kısa bir sürüş mesafesinde, tarih ve şarap açısından zengin bir kasaba olan Sremski Karlovci yer almaktadır. Dört Aslan Çeşmesi ve ilk Sırp lisesi de dahil olmak üzere güzel barok merkezini keşfedeceğiz. Ziyaretin en önemli kısmı, yerel bir spesiyalite olan ünlü Bermet'i diğer bölgesel şaraplarla birlikte yerel atıştırmalıklarla eşleştirerek tatmak için aile tarafından işletilen bir şarap mahzenini ziyaret etmektir.", "es": "A poca distancia en coche de Novi Sad se encuentra Sremski Karlovci, un pueblo rico en historia y vino. Exploraremos su hermoso centro barroco, incluida la Fuente de los Cuatro Leones y la primera escuela secundaria serbia. Lo más destacado es una visita a una bodega familiar para degustar el famoso Bermet, una especialidad local, junto con otros vinos regionales, maridados con aperitivos locales.", "zh-HK": "距離諾維薩德僅一小段車程，便是歷史悠久、葡萄酒豐富的斯雷姆斯基卡爾洛夫奇。我們將探索其美麗的巴洛克中心，包括四獅噴泉和第一所塞爾維亞高中。行程的亮點是參觀一家家庭經營的酒窖，品嚐著名的本地特產Bermet葡萄酒以及其他地區葡萄酒，並搭配當地小吃。", "zh-CN": "距离诺维萨德仅一小段车程，便是历史悠久、葡萄酒丰富的斯雷姆斯基卡尔洛夫奇。我们将探索其美丽的巴洛克中心，包括四狮喷泉和第一所塞尔维亚高中。行程的亮点是参观一家家庭经营的酒窖，品尝著名的本地特产Bermet葡萄酒以及其他地区葡萄酒，并搭配当地小吃。", "ja": "ノヴィ・サドから車ですぐの場所に、歴史とワインが豊かな町、スレムスキ・カルロフツィがあります。4頭のライオンの噴水やセルビア初の高校など、美しいバロック様式の中心部を散策します。ハイライトは、家族経営のワインセラーを訪れ、地元の名物である有名なベルメットや他の地域のワインを地元の軽食と共に味わうことです。", "hi": "नोवी सैड से थोड़ी ही दूरी पर स्रेम्स्की कार्लोव्सी है, जो इतिहास और शराब से समृद्ध एक शहर है। हम इसके खूबसूरत बारोक केंद्र का पता लगाएंगे, जिसमें फोर लायंस फाउंटेन और पहला सर्बियाई हाई स्कूल शामिल है। इसका मुख्य आकर्षण एक परिवार द्वारा संचालित वाइन सेलर का दौरा है, जहां प्रसिद्ध बरमेट, एक स्थानीय विशेषता, के साथ-साथ अन्य क्षेत्रीय वाइन का स्वाद लिया जाएगा, जिसे स्थानीय स्नैक्स के साथ जोड़ा गया है।" },
+                    "images": [ "https://images.unsplash.com/photo-1590152914991-62734673652f?q=80&w=2070&auto=format&fit=crop", "https://images.unsplash.com/photo-1506377247377-2a5b3b417ebb?q=80&w=2070&auto=format&fit=crop" ],
+                    "included": { "en": [ "Private car & driver", "Guided tour of Sremski Karlovci", "Wine tasting (3+ wines)", "Local snacks" ], "sr": [ "Privatni auto i vozač", "Vođena tura Sremskim Karlovcima", "Degustacija vina (3+ vrste)", "Lokalne zakuske" ], "hr": [ "Privatni auto i vozač", "Vođena tura Srijemskim Karlovcima", "Degustacija vina (3+ vrste)", "Lokalni zalogaji" ], "me": [ "Privatni auto i vozač", "Vođena tura Srijemskim Karlovcima", "Degustacija vina (3+ vrste)", "Lokalne zakuske" ], "ru": [ "Частный автомобиль и водитель", "Экскурсия по Сремски-Карловци", "Дегустация вин (3+ вида)", "Местные закуски" ], "de": [ "Privatwagen & Fahrer", "Führung durch Sremski Karlovci", "Weinprobe (3+ Weine)", "Lokale Snacks" ], "uk": [ "Приватний автомобіль та водій", "Екскурсія по Сремським Карловцям", "Дегустація вин (3+ види)", "Місцеві закуски" ], "tr": [ "Özel araç ve şoför", "Sremski Karlovci rehberli turu", "Şarap tadımı (3+ çeşit)", "Yerel atıştırmalıklar" ], "es": [ "Coche privado y conductor", "Visita guiada de Sremski Karlovci", "Cata de vinos (3+ vinos)", "Aperitivos locales" ], "zh-HK": [ "私人轎車與司機", "斯雷姆斯基卡爾洛夫奇導覽", "品酒（3種以上）", "當地小吃" ], "zh-CN": [ "私人轿车与司机", "斯雷姆斯基卡尔洛夫奇导览", "品酒（3种以上）", "当地小吃" ], "ja": [ "プライベートカー＆ドライバー", "スレムスキ・カルロフツィのガイド付きツアー", "ワインテイスティング（3種類以上）", "地元の軽食" ], "hi": [ "निजी कार और ड्राइवर", "स्रेम्स्की कार्लोव्सी का गाइडेड टूर", "वाइन टेस्टिंग (3+ वाइन)", "स्थानीय स्नैक्स" ] },
+                    "duration": { "en": "4 hours", "sr": "4 sata", "hr": "4 sata", "me": "4 sata", "ru": "4 часа", "de": "4 Stunden", "uk": "4 години", "tr": "4 saat", "es": "4 horas", "zh-HK": "4 小時", "zh-CN": "4 小时", "ja": "4時間", "hi": "4 घंटे" },
+                    "maxPeople": 6, "priceVariations": [ { "id": "1-2", "persons": "1-2", "price": 70 }, { "id": "3-4", "persons": "3-4", "price": 60 }, { "id": "5-6", "persons": "5-6", "price": 55 } ], "isAvailable": true, "isFeatured": true,
+                    "seo": { "metaTitle": { "en": "Sremski Karlovci Wine Tour | novisad.day" }, "metaDescription": { "en": "A historic and wine tasting tour to Sremski Karlovci." } }
+                },
+                {
+                    "id": "fruska-gora-monastery-tour",
+                    "title": { "en": "Fruška Gora Monasteries & Nature", "sr": "Fruška Gora Manastiri i Priroda", "hr": "Fruška Gora Manastiri i Priroda", "me": "Fruška Gora Manastiri i Priroda", "ru": "Монастыри и природа Фрушка-Горы", "de": "Klöster & Natur der Fruška Gora", "uk": "Монастирі та природа Фрушкої Гори", "tr": "Fruška Gora Manastırları ve Doğası", "es": "Monasterios y Naturaleza de Fruška Gora", "zh-HK": "弗魯什卡戈拉修道院與自然風光", "zh-CN": "弗鲁什卡戈拉修道院与自然风光", "ja": "フルシュカ・ゴーラ修道院と自然", "hi": "फ्रुस्का गोरा मठ और प्रकृति" },
+                    "subtitle": { "en": "Discover the spiritual heart of Serbia in the serene Fruška Gora National Park.", "sr": "Otkrijte duhovno srce Srbije u mirnom Nacionalnom parku Fruška gora.", "hr": "Otkrijte duhovno srce Srbije u mirnom Nacionalnom parku Fruška gora.", "me": "Otkrijte duhovno srce Srbije u mirnom Nacionalnom parku Fruška gora.", "ru": "Откройте для себя духовное сердце Сербии в безмятежном национальном парке Фрушка-Гора.", "de": "Entdecken Sie das spirituelle Herz Serbiens im ruhigen Nationalpark Fruška Gora.", "uk": "Відкрийте для себе духовне серце Сербії в спокійному національному парку Фрушка Гора.", "tr": "Sakin Fruška Gora Milli Parkı'nda Sırbistan'ın manevi kalbini keşfedin.", "es": "Descubra el corazón espiritual de Serbia en el sereno Parque Nacional de Fruška Gora.", "zh-HK": "在寧靜的弗魯什卡戈拉國家公園探索塞爾維亞的精神心臟。", "zh-CN": "在宁静的弗鲁什卡戈拉国家公园探索塞尔维亚的精神心脏。", "ja": "静かなフルシュカ・ゴーラ国立公園でセルビアの精神的な中心を発見してください。", "hi": "शांत फ्रुस्का गोरा राष्ट्रीय उद्यान में सर्बिया के आध्यात्मिक हृदय की खोज करें।" },
+                    "shortDescription": { "en": "Visit the historic Krušedol and Grgeteg monasteries, enjoy the beautiful landscapes, and have a traditional lunch at a local restaurant.", "sr": "Posetite istorijske manastire Krušedol i Grgeteg, uživajte u prelepim pejzažima i ručajte tradicionalno u lokalnom restoranu.", "hr": "Posjetite povijesne manastire Krušedol i Grgeteg, uživajte u prelijepim krajolicima i ručajte tradicionalno u lokalnom restoranu.", "me": "Posjetite istorijske manastire Krušedol i Grgeteg, uživajte u prelijepim pejzažima i ručajte tradicionalno u lokalnom restoranu.", "ru": "Посетите исторические монастыри Крушедол и Гргетег, насладитесь прекрасными пейзажами и пообедайте традиционным обедом в местном ресторане.", "de": "Besuchen Sie die historischen Klöster Krušedol und Grgeteg, genießen Sie die wunderschöne Landschaft und essen Sie ein traditionelles Mittagessen in einem lokalen Restaurant.", "uk": "Відвідайте історичні монастирі Крушедол та Гргетег, насолодіться прекрасними пейзажами та скуштуйте традиційний обід у місцевому ресторані.", "tr": "Tarihi Krušedol ve Grgeteg manastırlarını ziyaret edin, güzel manzaraların tadını çıkarın ve yerel bir restoranda geleneksel bir öğle yemeği yiyin.", "es": "Visite los históricos monasterios de Krušedol y Grgeteg, disfrute de los hermosos paisajes y almuerce tradicionalmente en un restaurante local.", "zh-HK": "參觀歷史悠久的克魯謝多爾和格爾蓋特格修道院，欣賞美麗的風景，並在當地餐廳享用傳統午餐。", "zh-CN": "参观历史悠久的克鲁谢多尔和格尔盖特格修道院，欣赏美丽的风景，并在当地餐厅享用传统午餐。", "ja": "歴史的なクルシェドル修道院とグルゲテグ修道院を訪れ、美しい風景を楽しみ、地元のレストランで伝統的なランチをどうぞ。", "hi": "ऐतिहासिक क्रुशेडोल और ग्रगेटेग मठों की यात्रा करें, सुंदर परिदृश्यों का आनंद लें, और एक स्थानीय रेस्तरां में पारंपरिक दोपहर का भोजन करें।" },
+                    "longDescription": { "en": "Escape to the tranquility of Fruška Gora, Serbia's oldest national park, often called the \"Serbian Mount Athos\". We will visit two of its most significant medieval monasteries, Krušedol and Grgeteg, to admire their frescoes and learn about their history. The tour includes a scenic drive through the park and concludes with a hearty traditional Serbian lunch at a rustic restaurant.", "sr": "P pobegnite u mir Fruške Gore, najstarijeg nacionalnog parka u Srbiji, koji se često naziva \"Srpska Sveta Gora\". Posetićemo dva od njegovih najznačajnijih srednjovekovnih manastira, Krušedol i Grgeteg, da se divimo njihovim freskama i saznamo o njihovoj istoriji. Tura uključuje slikovitu vožnju kroz park i završava se obilnim tradicionalnim srpskim ručkom u rustičnom restoranu.", "hr": "Pobjegnite u mir Fruške Gore, najstarijeg nacionalnog parka u Srbiji, koji se često naziva \"Srpska Sveta Gora\". Posjetit ćemo dva od njegovih najznačajnijih srednjovjekovnih manastira, Krušedol i Grgeteg, da se divimo njihovim freskama i saznamo o njihovoj povijesti. Tura uključuje slikovitu vožnju kroz park i završava obilnim tradicionalnim srpskim ručkom u rustikalnom restoranu.", "me": "Pobjegnite u mir Fruške Gore, najstarijeg nacionalnog parka u Srbiji, koji se često naziva \"Srpska Sveta Gora\". Posjetićemo dva od njegovih najznačajnijih srednjovjekovnih manastira, Krušedol i Grgeteg, da se divimo njihovim freskama i saznamo o njihovoj istoriji. Tura uključuje slikovitu vožnju kroz park i završava se obilnim tradicionalnim srpskim ručkom u rustičnom restoranu.", "ru": "Совершите побег в спокойствие Фрушка-Горы, старейшего национального парка Сербии, который часто называют \"Сербским Афоном\". Мы посетим два его наиболее значимых средневековых монастыря, Крушедол и Гргетег, чтобы полюбоваться их фресками и узнать об их истории. Экскурсия включает живописную поездку по парку и завершается сытным традиционным сербским обедом в деревенском ресторане.", "de": "Entfliehen Sie in die Ruhe der Fruška Gora, Serbiens ältestem Nationalpark, oft als \"Serbischer Berg Athos\" bezeichnet. Wir werden zwei seiner bedeutendensten mittelalterlichen Klöster, Krušedol und Grgeteg, besuchen, um ihre Fresken zu bewundern und mehr über ihre Geschichte zu erfahren. Die Tour beinhaltet eine malerische Fahrt durch den Park und endet mit einem herzhaften traditionellen serbischen Mittagessen in einem rustikalen Restaurant.", "uk": "Втечіть у спокій Фрушкої Гори, найстарішого національного парку Сербії, який часто називають \"Сербським Афоном\". Ми відвідаємо два його найважливіші середньовічні монастирі, Крушедол та Гргетег, щоб помилуватися їхніми фресками та дізнатися про їхню історію. Екскурсія включає мальовничу поїздку парком і завершується ситним традиційним сербським обідом у сільському ресторані.", "tr": "Sırbistan'ın en eski milli parkı olan ve sık sık \"Sırp Athos Dağı\" olarak anılan Fruška Gora'nın huzuruna kaçın. En önemli ortaçağ manastırlarından ikisi olan Krušedol ve Grgeteg'i ziyaret ederek fresklerine hayran kalacak ve tarihleri hakkında bilgi edineceğiz. Tur, park boyunca manzaralı bir sürüş içerir ve rustik bir restoranda doyurucu geleneksel bir Sırp öğle yemeği ile sona erer.", "es": "Escápese a la tranquilidad de Fruška Gora, el parque nacional más antiguo de Serbia, a menudo llamado el \"Monte Athos serbio\". Visitaremos two de sus monasterios medievales más importantes, Krušedol y Grgeteg, para admirar sus frescos y aprender sobre su historia. El recorrido incluye un paseo panorámico por el parque y concluye con un abundante almuerzo tradicional serbio en un restaurante rústico.", "zh-HK": "逃離到寧靜的弗魯什卡戈拉，這是塞爾維亞最古老的國家公園，常被稱為“塞爾維亞的阿索斯山”。我們將參觀其兩個最重要的中世紀修道院，克魯謝多爾和格爾蓋特格，欣賞它們的壁畫並了解其歷史。遊覽包括穿越公園的風景駕車之旅，並在一家鄉村風格的餐廳享用豐盛的傳統塞爾維亞午餐作為結束。", "zh-CN": "逃离到宁静的弗鲁什卡戈拉，这是塞尔维亚最古老的国家公园，常被称为“塞尔维亚的阿索斯山”。我们将参观其两个最重要的中世纪修道院，克鲁谢多尔和格尔盖特格，欣赏它们的壁画并了解其历史。游览包括穿越公园的风景驾车之旅，并在一家乡村风格的餐厅享用丰盛的传统塞尔维亚午餐作为结束。", "ja": "セルビア最古の国立公園であり、「セルビアのアトス山」とも呼ばれるフルシュカ・ゴーラの静けさへ脱出しましょう。最も重要な中世の修道院のうち2つ、クルシェドルとグルゲテグを訪れ、フレスコ画を鑑賞し、その歴史を学びます。ツアーには公園を抜ける景色の良いドライブが含まれており、素朴なレストランでの心のこもった伝統的なセルビア料理のランチで締めくくります。", "hi": "सर्बिया के सबसे पुराने राष्ट्रीय उद्यान, फ्रुस्का गोरा की शांति में पलायन करें, जिसे अक्सर \"सर्बियाई माउंट एथोस\" कहा जाता है। हम इसके दो सबसे महत्वपूर्ण मध्ययुगीन मठों, क्रुशेडोल और ग्रगेटेग का दौरा करेंगे, ताकि उनके भित्तिचित्रों की प्रशंसा कर सकें और उनके इतिहास के बारे में जान सकें। इस दौरे में पार्क के माध्यम से एक सुंदर ड्राइव शामिल है और एक देहाती रेस्तरां में एक हार्दिक पारंपरिक सर्बियाई दोपहर के भोजन के साथ समाप्त होता है।" },
+                    "images": [ "https://images.unsplash.com/photo-1599493397121-cb4e1a49216f?q=80&w=2070&auto=format&fit=crop", "https://images.unsplash.com/photo-1605338181342-0565d70f9a9a?q=80&w=2070&auto=format&fit=crop" ],
+                    "included": { "en": [ "Private car & driver", "Monastery entrance fees", "Professional guide", "Full traditional lunch" ], "sr": [ "Privatni auto i vozač", "Ulaznice za manastire", "Profesionalni vodič", "Kompletan tradicionalni ručak" ], "hr": [ "Privatni auto i vozač", "Ulaznice za manastire", "Profesionalni vodič", "Kompletan tradicionalni ručak" ], "me": [ "Privatni auto i vozač", "Ulaznice za manastire", "Profesionalni vodič", "Kompletan tradicionalni ručak" ], "ru": [ "Частный автомобиль и водитель", "Входные билеты в монастыри", "Профессиональный гид", "Полный традиционный обед" ], "de": [ "Privatwagen & Fahrer", "Eintrittsgelder für Klöster", "Professioneller Führer", "Vollständiges traditionelles Mittagessen" ], "uk": [ "Приватний автомобіль та водій", "Вхідні квитки до монастирів", "Професійний гід", "Повний традиційний обід" ], "tr": [ "Özel araç ve şoför", "Manastır giriş ücretleri", "Profesyonel rehber", "Tam geleneksel öğle yemeği" ], "es": [ "Coche privado y conductor", "Entradas a los monasterios", "Guía profesional", "Almuerzo tradicional completo" ], "zh-HK": [ "私人轎車與司機", "修道院門票", "專業導遊", "全套傳統午餐" ], "zh-CN": [ "私人轿车与司机", "修道院门票", "专业导游", "全套传统午餐" ], "ja": [ "プライベートカー＆ドライバー", "修道院入場料", "プロのガイド", "伝統的なランチ" ], "hi": [ "निजी कार और ड्राइवर", "मठ प्रवेश शुल्क", "पेशेवर गाइड", "पूर्ण पारंपरिक दोपहर का भोजन" ] },
+                    "duration": { "en": "6-7 hours", "sr": "6-7 sati", "hr": "6-7 sati", "me": "6-7 sati", "ru": "6-7 часов", "de": "6-7 Stunden", "uk": "6-7 годин", "tr": "6-7 saat", "es": "6-7 horas", "zh-HK": "6-7 小時", "zh-CN": "6-7 小时", "ja": "6〜7時間", "hi": "6-7 घंटे" },
+                    "maxPeople": 6, "priceVariations": [ { "id": "1-2", "persons": "1-2", "price": 90 }, { "id": "3-4", "persons": "3-4", "price": 80 }, { "id": "5-6", "persons": "5-6", "price": 75 } ], "isAvailable": true, "isFeatured": false,
+                    "seo": { "metaTitle": { "en": "Fruška Gora Monasteries Tour | novisad.day" }, "metaDescription": { "en": "Explore medieval monasteries and nature in Fruška Gora." } }
+                },
+                {
+                    "id": "novi-sad-foodie-tour",
+                    "title": { "en": "Novi Sad Culinary Delights", "sr": "Kulinarski Užici Novog Sada", "hr": "Kulinarski Užitci Novog Sada", "me": "Kulinarski Užici Novog Sada", "ru": "Кулинарные изыски Нови-Сада", "de": "Kulinarische Köstlichkeiten von Novi Sad", "uk": "Кулінарні насолоди Нового Саду", "tr": "Novi Sad'ın Mutfak Lezzetleri", "es": "Delicias Culinarias de Novi Sad", "zh-HK": "諾維薩德美食之旅", "zh-CN": "诺维萨德美食之旅", "ja": "ノヴィ・サドの美食の喜び", "hi": "नोवी सैड के पाक व्यंजन" },
+                    "subtitle": { "en": "Taste the authentic flavors of Vojvodina.", "sr": "Okusite autentične ukuse Vojvodine.", "hr": "Okusite autentične okuse Vojvodine.", "me": "Okusite autentične ukuse Vojvodine.", "ru": "Попробуйте подлинные вкусы Воеводины.", "de": "Probieren Sie die authentischen Aromen der Vojvodina.", "uk": "Скуштуйте автентичні смаки Воєводини.", "tr": "Voyvodina'nın otantik lezzetlerini tadın.", "es": "Pruebe los sabores auténticos de Voivodina.", "zh-HK": "品嚐佛伊弗迪納的正宗風味。", "zh-CN": "品尝佛伊弗迪纳的正宗风味。", "ja": "ヴォイヴォディナの本格的な味を体験してください。", "hi": "वोज्वोडिना के प्रामाणिक स्वादों का स्वाद लें。" },
+                    "shortDescription": { "en": "A walking tour dedicated to the rich culinary heritage of Novi Sad, with multiple tastings of local specialties.", "sr": "Pešačka tura posvećena bogatom kulinarskom nasleđu Novog Sada, sa više degustacija lokalnih specijaliteta.", "hr": "Pješačka tura posvećena bogatom kulinarskom naslijeđu Novog Sada, s više degustacija lokalnih specijaliteta.", "me": "Pješačka tura posvećena bogatom kulinarskom naslijeđu Novog Sada, sa više degustacija lokalnih specijaliteta.", "ru": "Пешеходная экскурсия, посвященная богатому кулинарному наследию Нови-Сада, с многочисленными дегустациями местных деликатесов.", "de": "Ein Spaziergang, der dem reichen kulinarischen Erbe von Novi Sad gewidmet ist, mit mehreren Verkostungen lokaler Spezialitäten.", "uk": "Пішохідна екскурсія, присвячена багатій кулінарній спадщині Нового Саду, з численними дегустаціями місцевих страв.", "tr": "Novi Sad'ın zengin mutfak mirasına adanmış, yerel spesiyalitelerin çok sayıda tadımını içeren bir yürüyüş turu.", "es": "Un recorrido a pie dedicado al rico patrimonio culinario de Novi Sad, con múltiples degustaciones de especialidades locales.", "zh-HK": "一趟專注於諾維薩德豐富烹飪遺產的徒步之旅，包含多種當地特色美食的品嚐。", "zh-CN": "一趟专注于诺维萨德丰富烹饪遗产的徒步之旅，包含多种当地特色美食的品尝。", "ja": "ノヴィ・サドの豊かな食文化に特化したウォーキングツアーで、地元の名物料理を複数試食できます。", "hi": "नोवी सैड की समृद्ध पाक विरासत को समर्पित एक पैदल यात्रा, जिसमें स्थानीय विशिष्टताओं के कई स्वाद शामिल हैं।" },
+                    "longDescription": { "en": "Embark on a delicious journey through Novi Sad's food scene. We will visit local markets to see fresh produce, stop by a traditional bakery for a 'burek', taste savory grilled meats at a local 'roštilj' place, and finish with a sweet treat like 'Krempita'. This tour is a perfect introduction to the multicultural cuisine of the region.", "sr": "Krenite na ukusno putovanje kroz gastronomsku scenu Novog Sada. Posetićemo lokalne pijace da vidimo sveže proizvode, svratićemo u tradicionalnu pekaru na burek, probaćemo slano meso sa roštilja u lokalnom roštilj restoranu i završiti slatkim desertom poput krempite. Ova tura je savršen uvod u multikulturalnu kuhinju regiona.", "hr": "Krenite na ukusno putovanje kroz gastronomsku scenu Novog Sada. Posjetit ćemo lokalne tržnice da vidimo svježe proizvode, svratit ćemo u tradicionalnu pekaru na burek, kušati slano meso s roštilja u lokalnom roštilj restoranu i završiti slatkim desertom poput krempite. Ova tura je savršen uvod u multikulturalnu kuhinju regije.", "me": "Krenite na ukusno putovanje kroz gastronomsku scenu Novog Sada. Posjetićemo lokalne pijace da vidimo svježe proizvode, svratićemo u tradicionalnu pekaru na burek, probaćemo slano meso sa roštilja u lokalnom roštilj restoranu i završiti slatkim desertom poput krempite. Ova tura je savršen uvod u multikulturalnu kuhinju regiona.", "ru": "Отправьтесь в восхитительное путешествие по гастрономической сцене Нови-Сада. Мы посетим местные рынки, чтобы увидеть свежие продукты, заглянем в традиционную пекарню за «буреком», попробуем сочное мясо на гриле в местном «роштиле» и закончим сладким угощением, таким как «Кремпита». Этот тур — идеальное введение в мультикультурную кухню региона.", "de": "Begeben Sie sich auf eine köstliche Reise durch die Food-Szene von Novi Sad. Wir besuchen lokale Märkte, um frische Produkte zu sehen, halten bei einer traditionellen Bäckerei für einen \"Burek\", probieren herzhaftes Grillfleisch in einem lokalen \"Roštilj\"-Lokal und schließen mit einer süßen Leckerei wie \"Krempita\" ab. Diese Tour ist eine perfekte Einführung in die multikulturelle Küche der Region.", "uk": "Вирушайте у смачну подорож гастрономічною сценою Нового Саду. Ми відвідаємо місцеві ринки, щоб побачити свіжі продукти, завітаємо до традиційної пекарні на «бурек», скуштуємо соковите м'ясо на грилі в місцевому «роштилі» та завершимо солодким десертом, таким як «Кремпіта». Цей тур є ідеальним знайомством з мультикультурною кухнею регіону.", "tr": "Novi Sad'ın yemek sahnesinde lezzetli bir yolculuğa çıkın. Taze ürünleri görmek için yerel pazarları ziyaret edeceğiz, 'burek' için geleneksel bir fırına uğrayacağız, yerel bir 'roštilj' mekanında lezzetli ızgara etleri tadacağız ve 'Krempita' gibi tatlı bir ikramla bitireceğiz. Bu tur, bölgenin çok kültürlü mutfağına mükemmel bir başlangıçtır.", "es": "Embárquese en un delicioso viaje por la escena gastronómica de Novi Sad. Visitaremos los mercados locales para ver productos frescos, nos detendremos en una panadería tradicional para probar un 'burek', degustaremos sabrosas carnes a la parrilla en un local de 'roštilj' y terminaremos con un dulce como la 'Krempita'. Este tour es una introducción perfecta a la cocina multicultural de la región.", "zh-HK": "踏上諾維薩德的美食之旅。我們將參觀當地市場，觀看新鮮農產品，在傳統麵包店停下來品嚐“burek”（一種肉餅），在當地的“roštilj”燒烤店品嚐美味的烤肉，最後以“Krempita”（奶油蛋糕）等甜點結束。這次旅行是了解該地區多元文化美食的完美入門。", "zh-CN": "踏上诺维萨德的美食之旅。我们将参观当地市场，观看新鲜农产品，在传统面包店停下来品尝“burek”（一种肉饼），在当地的“roštilj”烧烤店品尝美味的烤肉，最后以“Krempita”（奶油蛋糕）等甜点结束。这次旅行是了解该地区多元文化美食的完美入门。", "ja": "ノヴィ・サドの食の世界を巡る美味しい旅に出かけましょう。地元の市場で新鮮な食材を見たり、伝統的なパン屋で「ブレク」を味わったり、地元の「ロシュティリ」で風味豊かなグリル肉を試食したりし、「クレンピタ」のような甘いお菓子で締めくくります。このツアーは、この地域の多文化料理への完璧な入門編です。", "hi": "नोवी सैड के खाद्य परिदृश्य के माध्यम से एक स्वादिष्ट यात्रा पर निकलें। हम ताजा उपज देखने के लिए स्थानीय बाजारों का दौरा करेंगे, 'ब्यूरेक' के लिए एक पारंपरिक बेकरी में रुकेंगे, एक स्थानीय 'रोश्टिल' जगह पर स्वादिष्ट ग्रिल्ड मीट का स्वाद लेंगे, और 'क्रेमपिटा' जैसी मीठी दावत के साथ समाप्त करेंगे। यह दौरा इस क्षेत्र के बहुसांस्कृतिक व्यंजनों का एक आदर्श परिचय है।" },
+                    "images": [ "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?q=80&w=1974&auto=format&fit=crop", "https://images.unsplash.com/photo-1628294896516-34693a1923a1?q=80&w=1974&auto=format&fit=crop" ],
+                    "included": { "en": [ "Local foodie guide", "5+ food & drink tastings", "Market visit" ], "sr": [ "Lokalni gastro vodič", "5+ degustacija hrane i pića", "Poseta pijaci" ], "hr": [ "Lokalni gastro vodič", "5+ degustacija hrane i pića", "Posjet tržnici" ], "me": [ "Lokalni gastro vodič", "5+ degustacija hrane i pića", "Posjeta pijaci" ], "ru": [ "Местный гид-гурмана", "5+ дегустаций еды и напитков", "Посещение рынка" ], "de": [ "Lokaler Foodie-Guide", "5+ Verkostungen von Speisen & Getränken", "Marktbesuch" ], "uk": [ "Місцевий гастрономічний гід", "5+ дегустацій їжі та напоїв", "Відвідування ринку" ], "tr": [ "Yerel yemek rehberi", "5+ yiyecek ve içecek tadımı", "Pazar ziyareti" ], "es": [ "Guía gastronómico local", "5+ degustaciones de comida y bebida", "Visita al mercado" ], "zh-HK": [ "本地美食導遊", "5種以上餐飲品嚐", "市場參觀" ], "zh-CN": [ "本地美食导游", "5种以上餐饮品尝", "市场参观" ], "ja": [ "地元の食通ガイド", "5種類以上の飲食試食", "市場訪問" ], "hi": [ "स्थानीय फूडी गाइड", "5+ भोजन और पेय चखना", "बाजार का दौरा" ] },
+                    "duration": { "en": "3-4 hours", "sr": "3-4 sata", "hr": "3-4 sata", "me": "3-4 sata", "ru": "3-4 часа", "de": "3-4 Stunden", "uk": "3-4 години", "tr": "3-4 saat", "es": "3-4 horas", "zh-HK": "3-4 小時", "zh-CN": "3-4 小时", "ja": "3〜4時間", "hi": "3-4 घंटे" },
+                    "maxPeople": 8, "priceVariations": [ { "id": "1-2", "persons": "1-2", "price": 60 }, { "id": "3-4", "persons": "3-4", "price": 55 }, { "id": "5-8", "persons": "5-8", "price": 50 } ], "isAvailable": true, "isFeatured": true,
+                    "seo": { "metaTitle": { "en": "Novi Sad Foodie Tour | novisad.day" }, "metaDescription": { "en": "Taste the best of Novi Sad with our culinary walking tour." } }
+                }
+            ],
+          inquiries: [],
+          settings: {
+            heroImage: 'https://ik.imagekit.io/j6wdxvinv/Servio%20site/NS%20hero.jpg'
+          },
+          logEntries: []
+        };
+        writeDb(defaultData);
+    }
+});

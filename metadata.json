@@ -1,0 +1,7 @@
+{
+  "name": "Supabase test Dobra - V2.1 novisad.day - Novi Sad Experiences",
+  "description": "Discover and book exclusive local tour experiences in Novi Sad, Serbia. App-like design for a seamless user experience.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
